@@ -1,0 +1,9 @@
+# macOS junk (AppleDouble resource forks on exFAT/SSD, Finder metadata)
+._*
+.DS_Store
+.AppleDouble
+.Spotlight-V100
+.Trashes
+
+# Playwright / test scratch
+.playwright-mcp/
