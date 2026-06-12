@@ -7,3 +7,7 @@
 
 # Playwright / test scratch
 .playwright-mcp/
+.vercel
+
+# generated headless test build (regenerate: python3 tools/mk-pinch-test.py)
+pinch-test.html

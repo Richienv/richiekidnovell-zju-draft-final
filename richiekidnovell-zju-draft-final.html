@@ -308,12 +308,12 @@ function clearPanels(){ livePanel.visible=false; liveOn=false; }   // (locked/fr
 const lensMat=new THREE.ShaderMaterial({ transparent:true, depthTest:false, depthWrite:false, side:THREE.DoubleSide,
   uniforms:{ uCam:{value:camTex}, uMirror:{value:mirror?1:0}, uRes:{value:new THREE.Vector2(1,1)},
     uMask:{value:null}, uHasMask:{value:0}, uMaskFY:{value:1},
-    uTime:{value:0}, uMode:{value:0}, uOn:{value:0} },
+    uTime:{value:0}, uMode:{value:0}, uOn:{value:0}, uBlip:{value:0} },
   vertexShader:`varying vec4 vClip; varying vec2 vUv; varying vec3 vN,vV;
     void main(){ vUv=uv; vN=normalize(normalMatrix*normal); vec4 mv=modelViewMatrix*vec4(position,1.0); vV=-mv.xyz;
       vClip=projectionMatrix*mv; gl_Position=vClip; }`,
   fragmentShader: CAM_PRELUDE + `varying vec4 vClip; varying vec2 vUv; varying vec3 vN,vV;
-    uniform float uTime,uMode,uOn;
+    uniform float uTime,uMode,uOn,uBlip;
     float hsh2(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453); }
     vec3 jet(float t){ return clamp(vec3(1.5-abs(4.0*t-3.0), 1.5-abs(4.0*t-2.0), 1.5-abs(4.0*t-1.0)),0.0,1.0); }
     void main(){
@@ -345,16 +345,18 @@ const lensMat=new THREE.ShaderMaterial({ transparent:true, depthTest:false, dept
       float fres=pow(1.0-abs(dot(normalize(vN),normalize(vV))),3.0);
       float streak=frame*pow(0.5+0.5*sin(uTime*1.6+(vUv.x+vUv.y)*5.0),10.0)*1.4;
       col+=vec3(0.85,0.92,1.0)*(frame*0.55+fres*0.35+streak);
+      col+=vec3(0.70,0.88,1.0)*uBlip*(0.22+0.78*pow(0.5+0.5*sin((vUv.y-uTime*2.4)*34.0),3.0));   // mode-switch rescan sweep
       gl_FragColor=vec4(col, uOn*(0.96+frame*0.04)); }` });
 camFxMats.push(lensMat);   // mirror toggle keeps uMirror in sync
 const lensMesh=new THREE.Mesh(new THREE.PlaneGeometry(1,1), lensMat);
 lensMesh.renderOrder=2; lensMesh.frustumCulled=false; lensMesh.visible=false; scene.add(lensMesh);
-let lensOn=0; const _lnP=new THREE.Vector3(0,0,-5), _lnV=new THREE.Vector3(), _lnQ=new THREE.Quaternion(), _lnAV=new THREE.Vector3();
+let lensOn=0, lensEngaged=false, _lnBlip=0, _lnMode=-1; const _lnP=new THREE.Vector3(0,0,-5), _lnV=new THREE.Vector3(), _lnQ=new THREE.Quaternion(), _lnAV=new THREE.Vector3();
 const _lnR=new THREE.Vector3(), _lnN=new THREE.Vector3(), _lnU=new THREE.Vector3(), _lnT=new THREE.Vector3(), _lnM=new THREE.Matrix4(), _lnTQ=new THREE.Quaternion();
 let _lnW=1, _lnH=0.6;
 function updateLens(now, dt){
   const f0=H3[0], f1=H3[1];
   const want=liveOn && f0.present && f1.present;
+  lensEngaged=want;                              // DEDUP: while the lens is up, the particle field stands down
   lensOn += ((want?1:0)-lensOn)*(1-Math.exp(-7*Math.max(dt,1e-4)));
   lensMesh.visible=lensOn>0.02;
   if(!lensMesh.visible) return;
@@ -373,6 +375,9 @@ function updateLens(now, dt){
   }
   const pop=0.7+0.3*lensOn;
   lensMesh.position.copy(_lnP); lensMesh.quaternion.copy(_lnQ); lensMesh.scale.set(_lnW*pop,_lnH*pop,1);
+  if(modeIdx!==_lnMode){ if(_lnMode>=0) _lnBlip=1; _lnMode=modeIdx; }      // pinch-cycle → rescan sweep (designed transition, ~300ms)
+  _lnBlip=Math.max(0,_lnBlip-dt*3.4);
+  lensMat.uniforms.uBlip.value=_lnBlip*lensOn;
   lensMat.uniforms.uTime.value=now/1000; lensMat.uniforms.uMode.value=modeIdx;
   lensMat.uniforms.uOn.value=lensOn; lensMat.uniforms.uRes.value.copy(camMat.uniforms.uRes.value);
 }
@@ -457,15 +462,15 @@ camFxMats.push(heroMat); maskMats.push(heroMat);
 let cloneAmt=0, sealActive=false, sealFrames=0;
 const personUV=new THREE.Vector2(0.5,0.45);   // smoothed person centre (≈ avg palm)
 let hasMask=0;
-function updateClones(){
+function updateClones(dt){
   sealActive=!puzzleActive && !composeActive && sealDetected();
   if(sealActive) sealFrames++; else sealFrames=0;
   const target=(sealActive && sealFrames>=4) ? 1.0 : 0.0;
-  cloneAmt=lerp(cloneAmt, target, target>0?0.16:0.12); if(cloneAmt<0.003 && target===0) cloneAmt=0;
+  cloneAmt=elerp(cloneAmt, target, target>0?10.5:7.7, dt); if(cloneAmt<0.003 && target===0) cloneAmt=0;
   // track the person (avg palm centre) → clones fan from here & crop the real person
   const pres=H.filter(h=>h.present);
   if(pres.length){ let sx=0,sy=0; for(const h of pres){ sx+=h.palmCtr.x; sy+=h.palmCtr.y; } sx/=pres.length; sy/=pres.length;
-    personUV.x=lerp(personUV.x,sx,0.2); personUV.y=lerp(personUV.y,sy,0.2); }
+    personUV.x=elerp(personUV.x,sx,13.4,dt); personUV.y=elerp(personUV.y,sy,13.4,dt); }
   const anx=personUV.x*2-1, any=1-2*personUV.y;       // anchor in NDC
   for(let i=0;i<cloneMeshes.length;i++){ const d=CLONES[i]; const la=clamp((cloneAmt-d.delay)*1.6,0,1);
     const u=cloneMeshes[i].material.uniforms;
@@ -715,7 +720,7 @@ function activeTextPreset(){
   }
   // ---- SINGLE-HAND poses (either hand) ----
   if(p0==='peace'||p1==='peace') return TP_LOVE;
-  if(p0==='fist'||p1==='fist')   return TP_COOL;
+  if((p0==='fist')!==(p1==='fist')) return TP_COOL;   // DEDUP: single fist only — both fists belong to the aura (no text flash while powering up)
   if(p0==='four'||p1==='four')   return TP_COMMENT;
   if(p0==='three'||p1==='three') return TP_NAME;
   if(p0==='thumb'||p1==='thumb') return TP_HEY;
@@ -834,7 +839,7 @@ function updateParticles(now, dt){
     textAspect = textAspFrom + (textAspTo-textAspFrom)*mm;
   } else { _curCol.copy(textColTo); }
   const textBusy = textActive || u.uText.value>0.04;             // keep the modes off until the text has fully dissolved
-  const modeActive = liveOn && !sealActive && !auraActive && !puzzleActive && !jjkActive && !composeActive && !textBusy && modeIdx<3;
+  const modeActive = liveOn && !lensEngaged && !sealActive && !auraActive && !puzzleActive && !jjkActive && !composeActive && !textBusy && modeIdx<3;   // DEDUP: two open hands = lens only; one open hand = field
   const active = modeActive;
   if(modeIdx<3 && modeIdx!==partB){ partA=partB; partB=modeIdx; partMorph=0; }
   partMorph=Math.min(1, partMorph + dt/0.5);
@@ -992,13 +997,13 @@ function updateAura(now, dt){
   const fistsUp = !puzzleActive && !composeActive && face.present && H[0].present && H[1].present &&
     isFistHand(H[0]) && isFistHand(H[1]) &&
     H[0].palmCtr.y < face.cy + face.ry*1.4 && H[1].palmCtr.y < face.cy + face.ry*1.4;
-  auraPower = lerp(auraPower, fistsUp?1:0, fistsUp?0.05:0.045);
+  auraPower = elerp(auraPower, fistsUp?1:0, fistsUp?3.1:2.8, dt);
   if(auraPower<0.004 && !fistsUp) auraPower=0;
   auraActive = auraPower>0.12;
-  // flare from hand speed (reuse the motion-energy idea)
+  // flare from hand speed (reuse the motion-energy idea) — fast attack, slow decay, dt-corrected
   const s0=H[0].present?handSpeed(H[0]):0, s1=H[1].present?handSpeed(H[1]):0;
   const rawE=clamp((Math.max(s0,s1)-0.004)/0.055,0,1);
-  auraEnergy = rawE>auraEnergy ? lerp(auraEnergy,rawE,0.5) : lerp(auraEnergy,rawE,0.07);
+  auraEnergy = rawE>auraEnergy ? elerp(auraEnergy,rawE,41.0,dt) : elerp(auraEnergy,rawE,4.3,dt);
   const fu=fireMat.uniforms;
   fu.uTime.value=now/1000; fu.uPower.value=auraPower; fu.uEnergy.value=auraEnergy*auraPower;
   fu.uHeadC.value.set(face.cx*2-1, 1-2*face.cy); fu.uHeadR.value.set(Math.max(0.04,face.rx*2), Math.max(0.05,face.ry*2));
@@ -1200,7 +1205,7 @@ function showFrameGuide(){ const W=window.innerWidth, H=window.innerHeight;
   const x0=Math.min(frameRect.x0,frameRect.x1), y0=Math.min(frameRect.y0,frameRect.y1), x1=Math.max(frameRect.x0,frameRect.x1), y1=Math.max(frameRect.y0,frameRect.y1);
   frameGuideEl.style.display='block'; frameGuideEl.style.left=(x0*W)+'px'; frameGuideEl.style.top=(y0*H)+'px';
   frameGuideEl.style.width=((x1-x0)*W)+'px'; frameGuideEl.style.height=((y1-y0)*H)+'px'; }
-function updatePuzzleInput(){
+function updatePuzzleInput(dt){
   // keep the SAME hand for the whole grab→drag→drop (don't drop it when the index curls during a pinch)
   let phi=-1;
   if(grabbed>=0 && grabHand>=0 && H[grabHand].present && H[grabHand].lmUV) phi=grabHand;
@@ -1208,7 +1213,7 @@ function updatePuzzleInput(){
   if(phi<0){ cursorVis=false; cursorPinch=false; pinchPrev=false; grabbed=-1; grabHand=-1; return; }
   const ph=H[phi]; cursorVis=true; const lm=ph.lmUV; const pinch=ph.pinch; cursorPinch=pinch;
   const pt = pinch ? {x:(lm[8].x+lm[4].x)/2, y:(lm[8].y+lm[4].y)/2} : lm[8];   // stable grab point while pinching
-  cursorUV=[pt.x,pt.y]; cursorSm=[lerp(cursorSm[0],pt.x,0.55), lerp(cursorSm[1],pt.y,0.55)];
+  cursorUV=[pt.x,pt.y]; cursorSm=[elerp(cursorSm[0],pt.x,48.0,dt), elerp(cursorSm[1],pt.y,48.0,dt)];
   const ndcx=cursorSm[0]*2-1, ndcy=1-2*cursorSm[1]; const cell=nearestCell(ndcx,ndcy);
   if(!puzzleSolved){
     if(pinch && !pinchPrev && cell>=0){ const t=tileAtCell(cell); if(t){ grabbed=tiles.indexOf(t); grabHand=phi; } }   // GRAB nearest tile
@@ -1239,12 +1244,12 @@ function updatePuzzle(now, dt){
   } else snapPinchPrev=false;
   if(puzzleState==='puzzle'){
     if(both){ retakeHold++; if(retakeHold>=8){ puzzleState='framing'; for(const m of tileMeshes) m.visible=false; fwPts.visible=false; pzSolvedEl.style.display='none'; } } else retakeHold=0;
-    updatePuzzleInput(); checkSolved(now);
+    updatePuzzleInput(dt); checkSolved(now);
     const ts=tileScaleNDC();
     for(let i=0;i<9;i++){ const t=tiles[i]; let tx,ty,sc=1,ro=1;
       if(i===grabbed){ tx=cursorSm[0]*2-1; ty=1-2*cursorSm[1]; sc=1.14; ro=4; }
       else { const c=cellCenterNDC(t.cell); tx=c[0]; ty=c[1]; }
-      t.px=lerp(t.px,tx, i===grabbed?0.55:0.3); t.py=lerp(t.py,ty, i===grabbed?0.55:0.3);
+      const tk=(i===grabbed)?48.0:21.4; t.px=elerp(t.px,tx,tk,dt); t.py=elerp(t.py,ty,tk,dt);
       tileMeshes[i].position.set(t.px,t.py,0); tileMeshes[i].scale.set(ts[0]*sc,ts[1]*sc,1); tileMeshes[i].renderOrder=ro; }
     const bld=clamp((now-buildStart)/BUILD_DUR,0,1);            // Minecraft chunk-load progress
     for(let i=0;i<9;i++){ const u=tileMeshes[i].material.uniforms; u.uBuild.value=bld;
@@ -1373,7 +1378,7 @@ function mkHoloCube(colA,colB){
     new THREE.LineBasicMaterial({ color:new THREE.Color(colB).lerp(new THREE.Color(0xffffff),0.5), transparent:true, opacity:0.85, blending:THREE.AdditiveBlending, depthTest:false }));
   edges.renderOrder=3; g.add(edges);
   g.visible=false; g.scale.setScalar(0.001); scene.add(g);
-  return { g, vol, shell, edges, pos:new THREE.Vector3(0,0,-5), vel:new THREE.Vector3(), quat:new THREE.Quaternion(), avel:new THREE.Vector3(), s:0, spin:Math.random()*6.28 };
+  return { g, vol, shell, edges, pos:new THREE.Vector3(0,0,-5), vel:new THREE.Vector3(), quat:new THREE.Quaternion(), avel:new THREE.Vector3(), s:0, sv:0, spin:Math.random()*6.28 };
 }
 const holoCubes=[ mkHoloCube(0xff2030,0xff7050), mkHoloCube(0x1860ff,0x40c8ff) ];   // [0]=RED left ☝, [1]=BLUE right ☝
 const _holoPureA=[new THREE.Color(0xff2030), new THREE.Color(0x1860ff)], _holoPureB=[new THREE.Color(0xff7050), new THREE.Color(0x40c8ff)];
@@ -1391,7 +1396,8 @@ function updateHolo(now, dt, redAmt, blueAmt, merge){
   const amts=[redAmt, blueAmt], t=now/1000;
   _hmid.copy(holoCubes[0].pos).add(holoCubes[1].pos).multiplyScalar(0.5);
   for(let i=0;i<2;i++){ const c=holoCubes[i], f=H3[i], amt=amts[i];
-    c.s += ((amt>0.05 && f.present ? 1:0)-c.s)*(1-Math.exp(-7*Math.max(dt,1e-4)));
+    const sT=(amt>0.05 && f.present)?1:0, sdt=Math.min(dt,0.033);           // entrance pops with ~8% overshoot, springy exit
+    c.sv += ((sT-c.s)*121.0 - c.sv*2.0*0.66*11.0)*sdt; c.s=Math.max(0, c.s + c.sv*sdt);
     if(c.s<0.02){ c.g.visible=false; continue; }
     c.g.visible=true;
     if(f.present){ _hv.copy(f.tip); _hv.y+=0.22;                       // float above the fingertip
@@ -1654,15 +1660,15 @@ function updateJJK(now, dt){
   const bothFrame = isFrameHand(H[0]) && isFrameHand(H[1]);   // both-hands L = entering the puzzle → don't fire orbs (they'd block puzzle entry)
   const redOn = !puzzleActive && !composeActive && !bothFrame && isPointHand(H[0]) && !!H[0].lmUV;
   const blueOn= !puzzleActive && !composeActive && !bothFrame && isPointHand(H[1]) && !!H[1].lmUV;
-  u.uRedAmt.value=lerp(u.uRedAmt.value, redOn?1:0, 0.2);
-  u.uBlueAmt.value=lerp(u.uBlueAmt.value, blueOn?1:0, 0.2);
+  u.uRedAmt.value=elerp(u.uRedAmt.value, redOn?1:0, 13.4, dt);
+  u.uBlueAmt.value=elerp(u.uBlueAmt.value, blueOn?1:0, 13.4, dt);
   if(redOn) u.uRed.value.set(H[0].lmUV[8].x*2-1, 1-2*H[0].lmUV[8].y);
   if(blueOn) u.uBlue.value.set(H[1].lmUV[8].x*2-1, 1-2*H[1].lmUV[8].y);
   let target=0;
   if(redOn&&blueOn){ const d=Math.hypot(H[0].lmUV[8].x-H[1].lmUV[8].x, H[0].lmUV[8].y-H[1].lmUV[8].y); target=clamp(1-(d-0.05)/0.22,0,1); }
-  mergeAmt=lerp(mergeAmt, target, 0.12); u.uMerge.value=mergeAmt; u.uTime.value=now/1000;
+  mergeAmt=elerp(mergeAmt, target, 7.7, dt); u.uMerge.value=mergeAmt; u.uTime.value=now/1000;
   jjkActive = u.uRedAmt.value>0.03 || u.uBlueAmt.value>0.03;
-  jjkPts.visible=jjkActive; arcLines.visible=false;   // electric arcs removed
+  jjkPts.visible=false; arcLines.visible=false;   // DEDUP: red/blue particle clouds retired — the holo-cubes are the only pointing visual
   const cu=jjkCoreMat.uniforms;   // glowing energy cores
   cu.uBlue.value.copy(u.uBlue.value); cu.uRed.value.copy(u.uRed.value);
   cu.uBlueAmt.value=u.uBlueAmt.value; cu.uRedAmt.value=u.uRedAmt.value; cu.uMerge.value=mergeAmt; cu.uTime.value=now/1000;
@@ -2037,7 +2043,7 @@ function loop(){
   updatePuzzle(now, dt);   // 📷 frame/snap/puzzle — sets puzzleActive (suppresses other effects)
   updateJJK(now, dt);      // 🟣 Limitless dual-hand orbs (Blue / Red / Hollow Purple)
   updateTree(now, dt);     // 🌸 PHASE-2b: bloom-tree grows between both-🤘 hands
-  updateClones();
+  updateClones(dt);
   updateAura(now, dt);
   if(newFrame && segmenter && (sealActive || cloneAmt>0.01 || auraActive)) updateMask(now);   // segment only while clones/aura active
   updatePanels(now);
